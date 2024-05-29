@@ -1,0 +1,7 @@
+*.xml
+.pyc
+*.pth
+*.pt
+*.safetensors
+*.out
+data
