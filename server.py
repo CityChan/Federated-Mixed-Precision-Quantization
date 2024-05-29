@@ -8,6 +8,7 @@ from utils.misc import AverageMeter,mkdir_p
 from utils.eval import accuracy,average_weights, sum_list,global_acc, average_stat
 from progress.bar import Bar
 from models.bit import BitLinear, BitConv2d
+from models.resnet import resnet
 import numpy as np
 
 class Server(object):
@@ -33,7 +34,7 @@ class Server(object):
         self.layer_weights = np.sum(num_params)/num_params
 
     def train(self):
-        for epoch in range(args["epochs"]):
+        for epoch in range(self.args["epochs"]):
             local_weights = []
             local_bit_assignments = []
             self.global_model.train()
@@ -54,7 +55,7 @@ class Server(object):
             global_weights = average_weights(local_weights)
             average_bit_assignment = average_stat(local_bit_assignments,sampled_clients, self.client_weights)
 
-            global_model.load_state_dict(global_weights)
+            self.global_model.load_state_dict(global_weights)
             acc_top1, acc_top5 = global_acc(self.global_model, self.testloader)
             print(f'Top 1 accuracy: {acc_top1}, Top 5 accuracy: {acc_top5}  at global round {epoch}.')
 

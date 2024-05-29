@@ -5,7 +5,8 @@ from utils.eval import accuracy,average_weights,average_weights_weighted, sum_li
 from progress.bar import Bar
 from models.bit import BitLinear, BitConv2d
 from models.resnet import resnet
-
+import time
+import torch
 class Client(object):
     def __init__(self, args, trainloader,idx, budget, bin = True):
         self.args = args
@@ -26,7 +27,7 @@ class Client(object):
             self.bit_assignment.append(self.Nbit_dict[key][0])
         self.TP = self.model.total_param()
         self.TB = self.model.total_bit()
-        
+        self.Comp = (self.TP *32)/self.TB
         self.optimizer = optim.SGD(self.model.parameters(), lr=args["lr"], momentum=args["momentum"], 
                                    weight_decay=args["weight_decay"])
         
@@ -55,11 +56,11 @@ class Client(object):
             
             # sparsity-promoting regularization term
             reg=0.
-            if self.args["decay"]:
+            if self.args["lambda"]:
                 for name, module in self.model.named_modules():
                     if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
                         reg = module.L1reg(reg)
-            total_loss = loss+self.args["decay"]*reg/self.TP
+            total_loss = loss+self.args["lambda"]*reg/self.TP
 
             # measure accuracy
             prec1, prec5 = accuracy(outputs.data, targets.data, topk=(1, 5))
@@ -77,7 +78,8 @@ class Client(object):
             batch_time.update(time.time() - end)
             end = time.time()
             # plot progress
-            bar.suffix  = '(CP: {Comp:.2f}X | Epoch:{epoch} {batch}/{size}) | Total: {total:} | ETA: {eta:} | top1: {top1: .4f} | top5: {top5: .4f}'.format(
+            bar.suffix  = '(Client: {idx} | CP: {Comp:.2f}X | Epoch:{epoch} {batch}/{size}) | Total: {total:} | ETA: {eta:} | top1: {top1: .4f} | top5: {top5: .4f}'.format(
+                        idx = self.idx,
                         Comp=self.Comp,
                         epoch=epoch,
                         batch=batch_idx + 1,
@@ -90,17 +92,17 @@ class Client(object):
             bar.next()
             bar.finish()
                 
-        return losses.avg, top1.avg
+        return top1.avg
 
 
     def local_training(self, global_epoch):
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args["lr"], momentum=self.args["momentum"],                                                             weight_decay=self.args.weight_decay)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args["lr"], momentum=self.args["momentum"],                                                             weight_decay=self.args["weight_decay"])
         
         for epoch in range(self.args["local_epochs"]):
             self.adjust_learning_rate(epoch + global_epoch*self.args["local_epochs"])
             for param_group in self.optimizer.param_groups:
                 lr = param_group['lr']
-            train_loss, train_acc = self.train(epoch)
+            train_acc = self.train(epoch)
             
             for name, module in self.model.named_modules():
                 if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
