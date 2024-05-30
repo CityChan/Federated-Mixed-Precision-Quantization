@@ -25,18 +25,18 @@ class Server(object):
                                               Nbits = 16, act_bit = 16, bin = False).cuda()
         n_samples = np.array([len(client.trainloader.dataset)*client.budget for client in self.clients])
         self.client_weights = n_samples / np.sum(n_samples)
-        
         num_params = []
         for name, module in self.global_model.named_modules():   
             if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
                 num_params.append(module.total_weight)
-        num_params = np.array(num_params)
-        self.layer_weights = np.sum(num_params)/num_params
+        self.num_params = np.array(num_params)
+        self.layer_weights = self.num_params/np.sum(self.num_params)
 
     def train(self):
         for epoch in range(self.args["epochs"]):
             local_weights = []
             local_bit_assignments = []
+            local_delta_bits = []
             self.global_model.train()
             print(f'\n | Global Training Round : {epoch+1} |\n')
             K = int(self.args["sampling_rate"]*self.args["n_clients"])
@@ -51,24 +51,26 @@ class Server(object):
 
                 local_weights.append(self.clients[idx].model.state_dict())
                 local_bit_assignments.append(np.array(self.clients[idx].bit_assignment))
-
+                local_delta_bits.append(np.array(self.clients[idx].delta_bit))
+                
             global_weights = average_weights(local_weights)
-            average_bit_assignment = average_stat(local_bit_assignments,sampled_clients, self.client_weights)
-
+            average_bit_assignment, average_dealta_bit = average_stat(local_bit_assignments,local_delta_bits,sampled_clients, self.client_weights)
+            layers_priority = self.layer_weights*average_dealta_bit
+            print(layers_priority)
             self.global_model.load_state_dict(global_weights)
             acc_top1, acc_top5 = global_acc(self.global_model, self.testloader)
             print(f'Top 1 accuracy: {acc_top1}, Top 5 accuracy: {acc_top5}  at global round {epoch}.')
 
             for idx in sampled_clients:
                 self.clients[idx].load_model(global_weights)
-                self.clients[idx].bit_assignment = self.pruning_or_growing(copy.deepcopy(average_bit_assignment),                                                                 layer_weights, num_params, self.clients[idx].budget)
+                self.clients[idx].bit_assignment = self.pruning_or_growing(copy.deepcopy(average_bit_assignment),                                                                 layers_priority, self.num_params, self.clients[idx].budget)
                 
                 # re-binarize the local model with the obtained bitwidth assignment
                 count = 0
                 for name, module in self.clients[idx].model.named_modules():                
                     if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
                         N0 = module.Nbits
-                        module.Nbits = int(Clients[idx].bit_assignment[count])
+                        module.Nbits = int(self.clients[idx].bit_assignment[count])
                         module.to_bin() 
                         N = module.Nbits
                         ex = np.arange(N-1, -1, -1)
@@ -76,33 +78,34 @@ class Server(object):
                         count += 1
 
 
-    def pruning_or_growing(self,average_bit_assignment, layer_weights, num_params, budget):
+    def pruning_or_growing(self,average_bit_assignment, layers_priority, num_params, budget):
         average_bit = 0
         n = len(average_bit_assignment)
         for i in range(n):
-            average_bit += layers_weights[i]*average_bit_assignment[i]
+            average_bit += self.layer_weights[i]*average_bit_assignment[i]
 
-        priority = copy.deepcopy(layer_weights)
-        cursor = np.argmin(priority)    
+        priority = copy.deepcopy(layers_priority)
+        cursor = np.argmax(priority)   
         count = 0
         while average_bit > budget and count < n:
             if average_bit_assignment[cursor] > 1:
                 average_bit_assignment[cursor] -= 1
-                average_bit -= layers_weights[cursor]*1
-            else:
-                priority[cursor] = float('inf')
-                cursor = np.argmin(priority)
-                count += 1
-        priority = copy.deepcopy(layer_weights)
-        cursor = np.argmax(priority)
-        count = 0
-        while average_bit < budget and count < n:
-            if average_bit_assignment[cursor] < 8:
-                average_bit_assignment[cursor] += 1
-                average_bit += layers_weights[cursor]*1
+                average_bit -= self.layer_weights[cursor]*1
             else:
                 priority[cursor] = -float('inf')
                 cursor = np.argmax(priority)
                 count += 1
+        priority = copy.deepcopy(layers_priority)
+        cursor = np.argmin(priority)
+        count = 0
+        while average_bit < budget and count < n:
+            if average_bit_assignment[cursor] < 8:
+                average_bit_assignment[cursor] += 1
+                average_bit += self.layer_weights[cursor]*1
+            else:
+                priority[cursor] = float('inf')
+                cursor = np.argmin(priority)
+                count += 1
         print(average_bit_assignment)
         return average_bit_assignment
+    

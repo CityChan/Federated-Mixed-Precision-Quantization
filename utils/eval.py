@@ -66,13 +66,15 @@ def global_acc(global_model, Loaders_test):
     return acc_top1, acc_top5
 
 
-def average_stat(local_bit_assignments, index,  weights):
+def average_stat(local_bit_assignments, local_delta_bits, index,  weights):
     n = len(local_bit_assignments[0])
     average_bit_assignment = np.zeros(n)
-    average_orthogonal_matrix = np.zeros((n, n))
+    average_delta_bit = np.zeros(n)
     for idx in range(len(local_bit_assignments)):
         average_bit_assignment += local_bit_assignments[idx]*weights[index[idx]]
+        average_delta_bit += local_delta_bits[idx]*weights[index[idx]]
     for i in range(n):
         average_bit_assignment[i] = round(average_bit_assignment[i])
+        average_delta_bit[i] = round(average_delta_bit[i] + 1)
         
-    return average_bit_assignment.tolist()
+    return average_bit_assignment.tolist(), average_delta_bit.tolist()

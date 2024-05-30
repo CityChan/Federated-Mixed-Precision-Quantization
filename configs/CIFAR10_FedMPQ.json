@@ -6,7 +6,7 @@
     "n_clients": 10,
     "local_epochs": 5,
     "epochs": 50,
-    "thre": 2.0,
+    "thre": 3.0,
     "lambda": 0.01,
     "sampling_rate": 1.0,
     "lr": 0.1,

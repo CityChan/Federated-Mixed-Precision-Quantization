@@ -5,8 +5,6 @@ Ported form
 https://github.com/facebook/fb.resnet.torch
 and
 https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
-and
-https://github.com/yanghr/BSQ
 '''
 import torch
 import torch.nn as nn
@@ -192,7 +190,7 @@ class ResNet(nn.Module):
             if isinstance(m, BitConv2d):
                 if m.bin:
                     n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                    ini_w = torch.full_like(m.pweight[...,0], 0)
+                    ini_w = torch.full_like(m.bweight[...,0], 0)
                     ini_w.normal_(0, math.sqrt(2. / n))
                     m.ini2bit(ini_w)
                 else:
@@ -239,10 +237,10 @@ class ResNet(nn.Module):
         for name, m in self.named_modules():
             if (isinstance(m,BitLinear) or isinstance(m,BitConv2d)) and 'downsample' not in name:
                 if m.bin:
-                    param = m.pweight-m.nweight
+                    param = m.bweight
                     N += np.prod(param.data.cpu().numpy().shape)/m.Nbits
-                    if m.pbias is not None:
-                        param = m.pbias-m.nbias
+                    if m.bbias is not None:
+                        param = m.bbias
                         N += np.prod(param.data.cpu().numpy().shape)/m.bNbits
                 else:
                     param = m.weight
@@ -257,10 +255,10 @@ class ResNet(nn.Module):
         for name, m in self.named_modules():
             if (isinstance(m,BitLinear) or isinstance(m,BitConv2d)) and 'downsample' not in name:
                 if m.bin:
-                    param = m.pweight-m.nweight
+                    param = m.bweight
                     N += np.prod(param.data.cpu().numpy().shape)
-                    if m.pbias is not None:
-                        param = m.pbias-m.nbias
+                    if m.bbias is not None:
+                        param = m.bbias
                         N += np.prod(param.data.cpu().numpy().shape)
                 else:
                     param = m.weight
@@ -275,7 +273,7 @@ class ResNet(nn.Module):
         for name, m in self.named_modules():
             if isinstance(m,BitLinear) or isinstance(m,BitConv2d):
                 Nbit_dict[name] = [m.Nbits, 0]
-                if m.pbias is not None or m.bias is not None:
+                if m.bbias is not None or m.bias is not None:
                     Nbit_dict[name] = [m.Nbits, m.bNbits]
         return Nbit_dict
     
@@ -288,27 +286,27 @@ class ResNet(nn.Module):
                 ex = np.arange(N0-1, -1, -1)
                 m.exps = torch.Tensor((2**ex)/(2**(N0)-1)).float()
                 m.Nbits = N0
+                m.Z = torch.tensor(2**(m.Nbits-1))
                 if N1:
                     ex = np.arange(N1-1, -1, -1)
                     m.bexps = torch.Tensor((2**ex)/(2**(N1)-1)).float()         
                     m.bNbits = N1
+                    m.Zb = torch.tensor(2**(m.bNbits-1))
                 if m.bin:
-                    m.pweight.data = m.pweight.data[...,0:N0]
-                    m.nweight.data = m.nweight.data[...,0:N0]
+                    m.bweight.data = m.bweight.data[...,0:N0]
                     if N1:
-                        m.pbias.data = m.pbias.data[...,0:N1]
-                        m.nbias.data = m.nbias.data[...,0:N1]
+                        m.bbias.data = m.bbias.data[...,0:N1]
                         
     def set_zero(self):
         for name, m in self.named_modules():
             if isinstance(m,BitLinear) or isinstance(m,BitConv2d):
-                weight = m.pweight.data-m.nweight.data
+                weight = m.bweight.data
                 if m.Nbits==1 and (np.count_nonzero(weight.cpu().numpy())==0):
                     m.zero=True
                 else:
                     m.zero=False
-                if m.pbias is not None:
-                    weight = m.pbias.data-m.nbias.data
+                if m.bbias is not None:
+                    weight = m.bbias.data
                     if m.bNbits==1 and (np.count_nonzero(weight.cpu().numpy())==0):
                         m.bzero=True
                     else:
@@ -321,52 +319,47 @@ class ResNet(nn.Module):
             if isinstance(m,BitLinear) or isinstance(m,BitConv2d):
                 if m.Nbits>1:
                     # Remove MSB
-                    weight = m.pweight.data.cpu().numpy()-m.nweight.data.cpu().numpy()
+                    weight = m.bweight.data.cpu().numpy()
                     total_weight = np.prod(weight.shape)/m.Nbits
                     nonz_weight = [np.count_nonzero(weight[...,i])*100 for i in range(m.Nbits)]
                     nonz_weight = nonz_weight/total_weight
                     N = m.Nbits
                     N0 = m.Nbits
-                    pweight = m.pweight.data
-                    nweight = m.nweight.data
+                    bweight = m.bweight.data
                     
                     for i in range(N):
                         if nonz_weight[i]==0:
-                            m.pweight.data = pweight[...,i+1:N]
-                            m.nweight.data = nweight[...,i+1:N]
+                            m.bweight.data = bweight[...,i+1:N]
                             m.Nbits -= 1
+                            m.Z = torch.tensor(2**(m.Nbits-1))
                             if m.Nbits==1:
                                 break
                         elif nonz_weight[i]<threshold: # set MSB to 0, remove MSB if "drop"
                             if drop:
-                                m.pweight.data = pweight[...,i+1:N]+pweight[...,i].unsqueeze(-1)
-                                m.nweight.data = nweight[...,i+1:N]+nweight[...,i].unsqueeze(-1)
+                                m.bweight.data = bweight[...,i+1:N]+bweight[...,i].unsqueeze(-1)
                                 m.Nbits -= 1
+                                m.Z = torch.tensor(2**(m.Nbits-1))
                                 if m.Nbits==1:
                                     break
                             else:
-                                m.pweight.data = pweight[...,i:N]+pweight[...,i].unsqueeze(-1)
-                                m.nweight.data = nweight[...,i:N]+nweight[...,i].unsqueeze(-1)
-                                m.pweight.data[...,0] = 0.
-                                m.nweight.data[...,0] = 0.
-                            m.pweight.data = torch.where(m.pweight.data < 1, m.pweight.data, torch.full_like(m.pweight.data, 1.))
-                            m.nweight.data = torch.where(m.nweight.data < 1, m.nweight.data, torch.full_like(m.nweight.data, 1.))
+                                m.bweight.data = bweight[...,i:N]+bweight[...,i].unsqueeze(-1)
+                                m.bweight.data[...,0] = 0.
+                            m.bweight.data = torch.where(m.bweight.data < 1, m.bweight.data, torch.full_like(m.bweight.data, 1.))
                         else:
                             break
                     # Remove LSB                  
-                    weight = m.pweight.data.cpu().numpy()-m.nweight.data.cpu().numpy()
+                    weight = m.bweight.data.cpu().numpy()
                     total_weight = np.prod(weight.shape)/m.Nbits
                     nonz_weight = [np.count_nonzero(weight[...,i])*100 for i in range(m.Nbits)]
                     nonz_weight = nonz_weight/total_weight
                     N = m.Nbits
-                    pweight = m.pweight.data
-                    nweight = m.nweight.data
+                    bweight = m.bweight.data
                     if m.Nbits>1:
                         for i in range(N):
                             if nonz_weight[N-1-i]<=threshold:
-                                m.pweight.data = pweight[...,0:N-1-i]
-                                m.nweight.data = nweight[...,0:N-1-i]
+                                m.bweight.data = bweight[...,0:N-1-i]
                                 m.Nbits -= 1
+                                m.Z = torch.tensor(2**(m.Nbits-1))
                                 m.scale.data = m.scale.data*2
                                 if m.Nbits==1:
                                     break
@@ -378,51 +371,48 @@ class ResNet(nn.Module):
                     m.exps = torch.Tensor((2**ex)/(2**(N)-1)).float()
                     m.scale.data = m.scale.data*(2**(N)-1)/(2**(N0)-1)
                     ## Match the shape of grad to data
-                    if m.pweight.grad is not None:
-                        m.pweight.grad.data = m.pweight.grad.data[...,0:N]
-                        m.nweight.grad.data = m.nweight.grad.data[...,0:N]
+                    if m.bweight.grad is not None:
+                        m.bweight.grad.data = m.bweight.grad.data[...,0:N]
+                        
                 # For bias
-                if m.pbias is not None and m.bNbits>1:
+                if m.bbias is not None and m.bNbits>1:
                     # Remove MSB
-                    weight = m.pbias.data.cpu().numpy()-m.nbias.data.cpu().numpy()
+                    weight = m.bbias.data.cpu().numpy()
                     total_weight = np.prod(weight.shape)/m.bNbits
                     nonz_weight = [np.count_nonzero(weight[...,i])*100 for i in range(m.bNbits)]
                     nonz_weight = nonz_weight/total_weight
                     N = m.bNbits
                     N0 = m.bNbits
-                    pweight = m.pbias.data
-                    nweight = m.nbias.data
+                    bweight = m.bbias.data
                     for i in range(N):
                         if nonz_weight[i]==0:
-                            m.pbias.data = pweight[...,i+1:N]
-                            m.nbias.data = nweight[...,i+1:N]
+                            m.bbias.data = bweight[...,i+1:N]
                             m.bNbits -= 1
+                            m.Zb = torch.tensor(2**(m.bNbits-1))
                             if m.bNbits==1:
                                 break
                         elif nonz_weight[i]<threshold:
-                            m.pbias.data = pweight[...,i+1:N]+pweight[...,i].unsqueeze(-1)
-                            m.nbias.data = nweight[...,i+1:N]+nweight[...,i].unsqueeze(-1)
-                            m.pbias.data = torch.where(m.pbias.data < 1, m.pbias.data, torch.full_like(m.pbias.data, 1.))
-                            m.nbias.data = torch.where(m.nbias.data < 1, m.nbias.data, torch.full_like(m.nbias.data, 1.))
+                            m.bbias.data = bweight[...,i+1:N]+bweight[...,i].unsqueeze(-1)
+                            m.bbias.data = torch.where(m.bbias.data < 1, m.bbias.data, torch.full_like(m.bbias.data, 1.))
                             m.bNbits -= 1
+                            m.Zb = torch.tensor(2**(m.bNbits-1))
                             if m.bNbits==1:
                                 break
                         else:
                             break
                     # Remove LSB                    
-                    weight = m.pbias.data.cpu().numpy()-m.nbias.data.cpu().numpy()
+                    weight = m.bbias.data.cpu().numpy()
                     total_weight = np.prod(weight.shape)/m.bNbits
                     nonz_weight = [np.count_nonzero(weight[...,i])*100 for i in range(m.bNbits)]
                     nonz_weight = nonz_weight/total_weight
                     if m.bNbits>1:
                         N = m.bNbits
-                        pweight = m.pbias.data
-                        nweight = m.nbias.data
+                        bweight = m.bbias.data
                         for i in range(N):
                             if nonz_weight[N-1-i]<=threshold:
-                                m.pbias.data = pweight[...,0:N-1-i]
-                                m.nbias.data = nweight[...,0:N-1-i]
+                                m.bbias.data = bweight[...,0:N-1-i]
                                 m.bNbits -= 1
+                                m.Zb = torch.tensor(2**(m.bNbits-1))
                                 m.biasscale.data = m.biasscale.data*2
                                 if m.bNbits==1:
                                     break
@@ -434,15 +424,13 @@ class ResNet(nn.Module):
                     m.bexps = torch.Tensor((2**ex)/(2**(N)-1)).float()
                     m.biasscale.data = m.biasscale.data*(2**(N)-1)/(2**(N0)-1)
                     ## Match the shape of grad to data
-                    if m.pbias.grad is not None:
-                        m.pbias.grad.data = m.pbias.grad.data[...,0:N]
-                        m.nbias.grad.data = m.nbias.grad.data[...,0:N]
-                if m.pbias is not None:
+                    if m.bbias.grad is not None:
+                        m.bbias.grad.data = m.bbias.grad.data[...,0:N]
+                if m.bbias is not None:
                     Nbit_dict[name] = [m.Nbits, m.bNbits]
                 else:
                     Nbit_dict[name] = [m.Nbits, 0]
         return Nbit_dict
-    
     
 def resnet(**kwargs):
     """

@@ -7,6 +7,7 @@ from models.bit import BitLinear, BitConv2d
 from models.resnet import resnet
 import time
 import torch
+import copy
 class Client(object):
     def __init__(self, args, trainloader,idx, budget, bin = True):
         self.args = args
@@ -30,7 +31,8 @@ class Client(object):
         self.Comp = (self.TP *32)/self.TB
         self.optimizer = optim.SGD(self.model.parameters(), lr=args["lr"], momentum=args["momentum"], 
                                    weight_decay=args["weight_decay"])
-        
+        self.delta_bit = [0]*len(self.bit_assignment)
+        state = copy.deepcopy(args)
     def train(self,epoch):
         self.model.train()
 
@@ -78,19 +80,14 @@ class Client(object):
             batch_time.update(time.time() - end)
             end = time.time()
             # plot progress
-            bar.suffix  = '(Client: {idx} | CP: {Comp:.2f}X | Epoch:{epoch} {batch}/{size}) | Total: {total:} | ETA: {eta:} | top1: {top1: .4f} | top5: {top5: .4f}'.format(
+            bar.suffix  = '(Client: {idx} | CP: {Comp:.2f}X | Epoch:{epoch} | top1: {top1: .4f}'.format(
                         idx = self.idx,
                         Comp=self.Comp,
                         epoch=epoch,
-                        batch=batch_idx + 1,
-                        size=len(self.trainloader),
-                        total=bar.elapsed_td,
-                        eta=bar.eta_td,
                         top1=top1.avg,
-                        top5=top5.avg,
                         )
             bar.next()
-            bar.finish()
+        bar.finish()
                 
         return top1.avg
 
@@ -113,10 +110,18 @@ class Client(object):
         
         # update bitwidth assignment 
         self.Nbit_dict = self.model.pruning(threshold=self.args["thre"], drop=True)
-        self.bit_assignment = []
+        
+        bit_assignment = []
+        delta_bit = []
         for key in self.Nbit_dict.keys():
-            self.bit_assignment.append(self.Nbit_dict[key][0])
-
+            bit_assignment.append(self.Nbit_dict[key][0])
+        
+        for i in range(len(bit_assignment)):
+            delta_bit.append(self.bit_assignment[i] - bit_assignment[i])
+        
+        self.delta_bit = delta_bit
+        self.bit_assignment = bit_assignment
+        
         del self.optimizer
         self.TP = self.model.total_param()
         self.TB = self.model.total_bit()

@@ -98,20 +98,19 @@ class BitLinear(Module):
         self.bin = bin
         self.total_weight = out_features*in_features
         self.total_bias = out_features
+        self.Z = torch.tensor(2**(self.Nbits-1))
+        self.Zb = torch.tensor(2**(self.bNbits-1))
         self.zero=False
         self.bzero=False
         self.ft = False
         if self.bin:
-            self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
-            self.nweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
+            self.bweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
             self.scale = Parameter(torch.Tensor(1))
             if bias:
-                self.pbias = Parameter(torch.Tensor(out_features, Nbits))
-                self.nbias = Parameter(torch.Tensor(out_features, Nbits))
+                self.bbias = Parameter(torch.Tensor(out_features, Nbits))
                 self.biasscale = Parameter(torch.Tensor(1))
             else:
-                self.register_parameter('pbias', None)
-                self.register_parameter('nbias', None)
+                self.register_parameter('bbias', None)
                 self.register_parameter('biasscale', None)
             self.bin_reset_parameters()
             # book keeping
@@ -125,11 +124,9 @@ class BitLinear(Module):
                 self.register_parameter('bias', None)
             self.reset_parameters()
             # book keeping
-            self.register_parameter('pweight', None)
-            self.register_parameter('nweight', None)
+            self.register_parameter('bweight', None)
             self.register_parameter('scale', None)
-            self.register_parameter('pbias', None)
-            self.register_parameter('nbias', None)
+            self.register_parameter('bbias', None)
             self.register_parameter('biasscale', None)
             
 
@@ -146,53 +143,43 @@ class BitLinear(Module):
         if ft:
             S = 1.0
         else:
-            S = torch.max(torch.abs(ini))
+            S = 2*torch.max(torch.abs(ini))
         if S==0:
             if b:
-                self.pbias.data.fill_(0)
-                self.nbias.data.fill_(0)
+                self.bbias.data.fill_(0)
             else:
-                self.pweight.data.fill_(0)
-                self.nweight.data.fill_(0)
+                self.bweight.data.fill_(0)
             return
-            
-        inip = torch.where(ini > 0, ini, torch.full_like(ini, 0))
-        inin = torch.where(ini <= 0, -ini, torch.full_like(ini, 0))
         if b:
             step = 2 ** (self.bNbits)-1
-            inip = torch.round(inip * step / S)
-            inin = torch.round(inin * step / S)
+            ini = torch.add(ini, S*self.Zb/step)
+            ini = torch.round(ini * step / S)
+            
             if not ft:
                 self.biasscale.data = S
-            Rp = inip
-            Rn = inin
+            Rb = ini
+            
             for i in range(self.bNbits):
                 ex = 2**(self.bNbits-i-1)
-                self.pbias.data[:,i] = torch.floor(Rp/ex)
-                self.nbias.data[:,i] = torch.floor(Rn/ex)
-                Rp = Rp-torch.floor(Rp/ex)*ex
-                Rn = Rn-torch.floor(Rn/ex)*ex
+                self.bbias.data[:,i] = torch.floor(Rb/ex)
+                Rb = Rb-torch.floor(Rb/ex)*ex
         else:
             step = 2 ** (self.Nbits)-1
-            inip = torch.round(inip * step / S)
-            inin = torch.round(inin * step / S)
+            ini = torch.add(ini, S*self.Z/step)
+            ini = torch.round(ini * step / S)
             if not ft:
                 self.scale.data = S
-            Rp = inip
-            Rn = inin
+            Rb = ini
             for i in range(self.Nbits):
                 ex = 2**(self.Nbits-i-1)
-                self.pweight.data[...,i] = torch.floor(Rp/ex)
-                self.nweight.data[...,i] = torch.floor(Rn/ex)
-                Rp = Rp-torch.floor(Rp/ex)*ex
-                Rn = Rn-torch.floor(Rn/ex)*ex
-
+                self.bweight.data[...,i] = torch.floor(Rb/ex)
+                Rb = Rb-torch.floor(Rb/ex)*ex
     def bin_reset_parameters(self):
     # For binary model
-        stdv = 1. / math.sqrt(self.pweight.size(1))
+        stdv = 1. / math.sqrt(self.bweight.size(1))
         ini_w = torch.Tensor(self.out_features, self.in_features).uniform_(-stdv, stdv)
         self.ini2bit(ini_w)
-        if self.pbias is not None:
+        if self.bbias is not None:
             ini_b = torch.Tensor(self.out_features).uniform_(-stdv, stdv)
             self.ini2bit(ini_b, b=True)
 
@@ -211,14 +198,13 @@ class BitLinear(Module):
                 self.bNbits=1
                 self.bias.data = self.bias.data*0
                 self.bzero=True
-            self.pweight = Parameter(self.weight.data.new_zeros(self.out_features, self.in_features, self.Nbits))
-            self.nweight = Parameter(self.weight.data.new_zeros(self.out_features, self.in_features, self.Nbits))
+                
+            self.bweight = Parameter(self.weight.data.new_zeros(self.out_features, self.in_features, self.Nbits))
             self.scale = Parameter(self.weight.data.new_zeros(1))
             self.ini2bit(self.weight.data)
             self.weight = None
             if self.bias is not None:
-                self.pbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
-                self.nbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
+                self.bbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
                 self.biasscale = Parameter(self.bias.data.new_zeros(1))
                 self.ini2bit(self.bias.data, b=True)
                 self.bias = None
@@ -227,23 +213,27 @@ class BitLinear(Module):
         if self.bin:
             self.bin = False
             self.ft = False
-            self.weight = Parameter(self.pweight.data.new_zeros(self.out_features, self.in_features))
-            dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            self.weight.data = torch.sum(weight,dim=2) * self.scale
+            self.weight = Parameter(self.bweight.data.new_zeros(self.out_features, self.in_features))
+            dev = self.bweight.device
+            weight = torch.mul(self.bweight, self.exps.to(dev))
+            weight =  torch.sum(weight,dim=2)
+            weight = torch.sub(weight, (self.Z/(2**(self.Nbits)-1)).to(dev))
+            self.weight.data = (weight * self.scale).float()
             if self.Nbits==1 and (np.count_nonzero(self.weight.data.cpu().numpy())==0):
                 self.Nbits=0
-            self.pweight = None
-            self.nweight = None
+            self.bweight = None
             self.scale = None
-            if self.pbias is not None:
-                self.bias = Parameter(self.pbias.data.new_zeros(self.out_features))
-                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
-                self.bias.data = torch.sum(bias,dim=1) * self.biasscale
+            
+            if self.bbias is not None:
+                self.bias = Parameter(self.bbias.data.new_zeros(self.out_features))
+                
+                bias = torch.mul(self.bbias, self.bexps.to(dev))
+                bias = torch.sum(bias,dim=1)
+                bias = torch.sub(bias, (self.Zb/(2**(self.bNbits)-1)).to(dev))
+                self.bias.data = bias * self.biasscale
                 if self.bNbits==1 and (np.count_nonzero(self.bias.data.cpu().numpy())==0):
                     self.bNbits=0
-                self.pbias = None
-                self.nbias = None
+                self.bbias = None
                 self.biasscale = None
         else:
             return
@@ -259,16 +249,15 @@ class BitLinear(Module):
             self.bNbits=1
             self.bias.data = self.bias.data*0
             self.bzero=True
-        self.pweight = Parameter(self.weight.data.new_zeros(self.out_features, self.in_features, self.Nbits))
-        self.nweight = Parameter(self.weight.data.new_zeros(self.out_features, self.in_features, self.Nbits))
+        self.bweight = Parameter(self.weight.data.new_zeros(self.out_features, self.in_features, self.Nbits))
         w = self.weight.data
+        
         w = torch.where(w > 1, torch.full_like(w, 1), w)
         w = torch.where(w < -1, torch.full_like(w, -1), w)
         self.ini2bit(w,ft=True)
         self.weight = None
         if self.bias is not None:
-            self.pbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
-            self.nbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
+            self.bbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
             w = self.bias.data
             w = torch.where(w > 1, torch.full_like(w, 1), w)
             w = torch.where(w < -1, torch.full_like(w, -1), w)
@@ -279,39 +268,45 @@ class BitLinear(Module):
         if self.bin:
             self.bin = False
             self.ft=True
-            self.weight = Parameter(self.pweight.data.new_zeros(self.out_features, self.in_features))
-            dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            self.weight.data = torch.sum(weight,dim=2)
+            self.weight = Parameter(self.bweight.data.new_zeros(self.out_features, self.in_features))
+            dev = self.bweight.device
+            weight = torch.mul(self.bweight, self.exps.to(dev))
+            weight = torch.sum(weight,dim=2)
+            self.weight.data = torch.sub(weight, (self.Z/(2**(self.Nbits)-1)).to(dev))
             if self.Nbits==1 and (np.count_nonzero(self.weight.data.cpu().numpy())==0):
                 self.Nbits=0
-            self.pweight = None
-            self.nweight = None
-            if self.pbias is not None:
-                self.bias = Parameter(self.pbias.data.new_zeros(self.out_features))
-                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
-                self.bias.data = torch.sum(bias,dim=1)
+            self.bweight = None
+            
+            if self.bbias is not None:
+                self.bias = Parameter(self.bbias.data.new_zeros(self.out_features))
+                
+                bias = torch.mul(self.bbias, self.bexps.to(dev))
+                bias = torch.sum(bias,dim=1)
+                self.bias.data = torch.sub(bias, (self.Zb/(2**(self.bNbits)-1)).to(dev))
                 if self.bNbits==1 and (np.count_nonzero(self.bias.data.cpu().numpy())==0):
                     self.bNbits=0
-                self.pbias = None
-                self.nbias = None
+                self.bbias = None
         else:
             return
 
     def forward(self, input):
         if self.bin:
-            dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            weight = bit_STE.apply(torch.sum(weight,dim=2), self.Nbits, self.zero) * self.scale
-            if self.pbias is not None:
-                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
-                bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
+            dev = self.bweight.device
+            weight = torch.mul(self.bweight, self.exps.to(dev))
+            weight = torch.sum(weight,dim=2)
+            weight = torch.sub(weight, (self.Z/(2**(self.Nbits)-1)).to(dev))
+            weight = bit_STE.apply(weight, self.Nbits, self.zero) * self.scale
+            if self.bbias is not None:
+                bias = torch.mul(self.bbias, self.bexps.to(dev))
+                bias = torch.sum(bias,dim=1)
+                bias = torch.sub(bias, (self.Zb/(2**(self.bNbits)-1)).to(dev))
+                bias = bit_STE.apply(bias, self.bNbits, self.bzero) * self.biasscale
             else:
                 bias = None
             return F.linear(input, weight, bias)
         elif self.ft:
             weight = bit_STE.apply(self.weight, self.Nbits, self.zero) * self.scale
-            if self.pbias is not None:
+            if self.bbias is not None:
                 bias = bit_STE.apply(self.bias, self.bNbits, self.bzero) * self.biasscale
             else:
                 bias = None
@@ -326,88 +321,63 @@ class BitLinear(Module):
             + ', out_features=' + str(self.out_features) \
             + ', bias=' + str(self.bias is not None) + ')'
 
-    def quant(self, maxbit = 16):
+    def quant(self, maxbit = 8):
     # For binary model
         ## Re-quantize the binary part of the weight, keep scale unchanged
         
-        dev = self.pweight.device
+        dev = self.bweight.device
         ## Quantize weight
-        weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
+        weight = torch.mul(self.bweight, self.exps.to(dev))
         weight = torch.sum(weight,dim=2)
-        inip = torch.where(weight > 0, weight, torch.full_like(weight, 0))
-        inin = torch.where(weight <= 0, -weight, torch.full_like(weight, 0))
+#         weight = torch.sub(weight, (self.Z/(2**(self.Nbits)-1)).to(dev)) 
+        ini = torch.clone(weight)
+       
         step = 2 ** (self.Nbits)-1
-        Rp = torch.round(inip * step)
-        Rn = torch.round(inin * step)
-        ## Increase layer precision if the binary part is out of range
-#         if self.Nbits>=maxbit:
-#             Rp = torch.where(Rp > step, torch.full_like(Rp, step), Rp)
-#             Rn = torch.where(Rn > step, torch.full_like(Rn, step), Rn)
-#         elif torch.max(torch.cat((Rp,Rn),0))>step:
-#             self.Nbits = self.Nbits+1
-#             self.pweight = Parameter(self.pweight.data.new_zeros(self.out_features, self.in_features, self.Nbits))
-#             self.nweight = Parameter(self.nweight.data.new_zeros(self.out_features, self.in_features, self.Nbits))
-#             N = self.Nbits 
-#             ex = np.arange(N-1, -1, -1)
-#             self.exps = torch.Tensor((2**ex)/(2**(N)-1)).float()
-#             self.scale.data = self.scale.data*(2**(N)-1)/(2**(N-1)-1)
+        
+#         ini = torch.add(ini, self.scale.data*self.Z/step)
+        Rb = torch.round(ini * step)
+
         
         for i in range(self.Nbits):
             ex = 2**(self.Nbits-i-1)
-            self.pweight.data[...,i] = torch.floor(Rp/ex)
-            self.nweight.data[...,i] = torch.floor(Rn/ex)
-            Rp = Rp-torch.floor(Rp/ex)*ex
-            Rn = Rn-torch.floor(Rn/ex)*ex
-        ## Quantize bias
-        if self.pbias is not None:
-            weight = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
-            weight = torch.sum(weight,dim=1)
-            inip = torch.where(weight > 0, weight, torch.full_like(weight, 0))
-            inin = torch.where(weight <= 0, -weight, torch.full_like(weight, 0))
-            step = 2 ** (self.bNbits)-1
-            Rp = torch.round(inip * step)
-            Rn = torch.round(inin * step)
+            self.bweight.data[...,i] = torch.floor(Rb/ex)
+            Rb = Rb - torch.floor(Rb/ex)*ex
             
-            ## Increase layer precision if the binary part is out of range
-#             if self.bNbits>=maxbit:
-#                 Rp = torch.where(Rp > step, torch.full_like(Rp, step), Rp)
-#                 Rn = torch.where(Rn > step, torch.full_like(Rn, step), Rn)
-#             elif torch.max(torch.cat((Rp,Rn),0))>step:
-#                 self.bNbits = self.bNbits+1
-#                 self.pbias = Parameter(self.pbias.data.new_zeros(self.out_features, self.bNbits))
-#                 self.nbias = Parameter(self.nbias.data.new_zeros(self.out_features, self.bNbits))
-#                 N = self.bNbits 
-#                 ex = np.arange(N-1, -1, -1)
-#                 self.bexps = torch.Tensor((2**ex)/(2**(N)-1)).float()
-#                 self.biasscale.data = self.biasscale.data*(2**(N)-1)/(2**(N-1)-1)
+        ## Quantize bias
+        if self.bbias is not None:
+            bias = torch.mul(self.bbias, self.bexps.to(dev))
+            bias = torch.sum(bias,dim=1)
+            bias = torch.sub(bias, (self.Zb/(2**(self.bNbits)-1)).to(dev))
+            ini = torch.clone(bias)
+            step = 2 ** (self.bNbits)-1
+            ini = torch.add(ini, self.biasscale.data*self.Zb/step)
+            Rb = torch.round(ini * step)
             
             for i in range(self.bNbits):
                 ex = 2**(self.bNbits-i-1)
-                self.pbias.data[:,i] = torch.floor(Rp/ex)
-                self.nbias.data[:,i] = torch.floor(Rn/ex)
-                Rp = Rp-torch.floor(Rp/ex)*ex
-                Rn = Rn-torch.floor(Rn/ex)*ex
+                self.bbias.data[:,i] = torch.floor(Rb/ex)
+                Rb = Rb-torch.floor(Rb/ex)*ex
                 
     def print_stat(self):
     # For binary model
-        weight = self.pweight.data.cpu().numpy()-self.nweight.data.cpu().numpy()
+        weight = self.bweight.data.cpu().numpy()
         total_weight = np.prod(weight.shape)/self.Nbits
         nonz_weight = [np.count_nonzero(weight[...,i])*100 for i in range(self.Nbits)]
         print('Weight: '+np.array2string(nonz_weight/total_weight, separator='%, ', formatter={'float_kind':lambda x: "%6.2f" % x}).strip('[]')+'%')
-        if self.pbias is not None:
-            bia = self.pbias.data.cpu().numpy()-self.nbias.data.cpu().numpy()
-            total_weight = np.prod(bia.shape)/self.bNbits
-            nonz_weight = [np.count_nonzero(bia[:,i])*100 for i in range(self.bNbits)]
+        if self.bbias is not None:
+            bias = self.bbias.data.cpu().numpy()
+            total_weight = np.prod(bias.shape)/self.bNbits
+            nonz_weight = [np.count_nonzero(bias[:,i])*100 for i in range(self.bNbits)]
             print('Bias:   '+np.array2string(nonz_weight/total_weight, separator='%, ', formatter={'float_kind':lambda x: "%6.2f" % x}).strip('[]')+'%')
         
 
     def L1reg(self,reg):
     # For binary model
-        param = torch.cat((self.pweight,self.nweight),0)
+        param = self.bweight
         total_weight = self.Nbits*self.total_weight
         reg += torch.sum(torch.sqrt(1e-8+torch.sum(param**2,(0,1))))*total_weight
-        if self.pbias is not None:
-            param = torch.cat((self.pbias,self.nbias),0)
+        if self.bbias is not None:
+            param = self.bbias
             total_bias = self.total_bias*self.bNbits
             reg += total_bias*torch.sum(torch.sqrt(1e-8+torch.sum(param**2,0)))
         return reg
@@ -451,28 +421,27 @@ class Bit_ConvNd(Module):
         self.bzero=False
         self.ft=False
         self.bin = bin
+        self.Z = torch.tensor(2**(self.Nbits-1))
+        self.Zb = torch.tensor(2**(self.bNbits-1))
         if self.bin:
             if transposed:
-                self.pweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
-                self.nweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
+                self.bweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
                 self.scale = Parameter(torch.Tensor(1))
             else:
-                self.pweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
-                self.nweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
+                self.bweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
                 self.scale = Parameter(torch.Tensor(1))
                 
             if bias:
-                self.pbias = Parameter(torch.Tensor(out_channels, Nbits))
-                self.nbias = Parameter(torch.Tensor(out_channels, Nbits))
+                self.bbias = Parameter(torch.Tensor(out_channels, Nbits))
                 self.biasscale = Parameter(torch.Tensor(1))
             else:
-                self.register_parameter('pbias', None)
-                self.register_parameter('nbias', None)
+                self.register_parameter('bbias', None)
                 self.register_parameter('biasscale', None)
             self.bin_reset_parameters()
             # book keeping
             self.register_parameter('weight', None)
             self.register_parameter('bias', None)
+
         else:
             if transposed:
                 self.weight = Parameter(torch.Tensor(
@@ -486,11 +455,9 @@ class Bit_ConvNd(Module):
                 self.register_parameter('bias', None)
             self.reset_parameters()
             # book keeping
-            self.register_parameter('pweight', None)
-            self.register_parameter('nweight', None)
+            self.register_parameter('bweight', None)
             self.register_parameter('scale', None)
-            self.register_parameter('pbias', None)
-            self.register_parameter('nbias', None)
+            self.register_parameter('bbias', None)
             self.register_parameter('biasscale', None)
 
     def reset_parameters(self):
@@ -506,54 +473,46 @@ class Bit_ConvNd(Module):
         if ft:
             S = 1.0
         else:
-            S = torch.max(torch.abs(ini))
+            S = 2*torch.max(torch.abs(ini))
         if S==0:
             if b:
-                self.pbias.data.fill_(0)
-                self.nbias.data.fill_(0)
+                self.bbias.data.fill_(0)
             else:
-                self.pweight.data.fill_(0)
-                self.nweight.data.fill_(0)
+                self.bweight.data.fill_(0)
             return
-            
-        inip = torch.where(ini > 0, ini, torch.full_like(ini, 0))
-        inin = torch.where(ini <= 0, -ini, torch.full_like(ini, 0))
         if b:
             step = 2 ** (self.bNbits)-1
-            inip = torch.round(inip * step / S)
-            inin = torch.round(inin * step / S)
+            ini = torch.add(ini, S*self.Zb/step)
+            ini = torch.round(ini * step / S)
             if not ft:
                 self.biasscale.data = S
-            Rp = inip
-            Rn = inin
+            Rb = ini
+            
             for i in range(self.bNbits):
                 ex = 2**(self.bNbits-i-1)
-                self.pbias.data[:,i] = torch.floor(Rp/ex)
-                self.nbias.data[:,i] = torch.floor(Rn/ex)
-                Rp = Rp-torch.floor(Rp/ex)*ex
-                Rn = Rn-torch.floor(Rn/ex)*ex
+                self.bbias.data[:,i] = torch.floor(Rb/ex)
+                Rb = Rb-torch.floor(Rb/ex)*ex
         else:
             step = 2 ** (self.Nbits)-1
-            inip = torch.round(inip * step / S)
-            inin = torch.round(inin * step / S)
+            ini = torch.add(ini, S*self.Z/step)
+            
+            ini = torch.round(ini * step / S)
+            
             if not ft:
                 self.scale.data = S
-            Rp = inip
-            Rn = inin
+            Rb = ini
             for i in range(self.Nbits):
                 ex = 2**(self.Nbits-i-1)
-                self.pweight.data[...,i] = torch.floor(Rp/ex)
-                self.nweight.data[...,i] = torch.floor(Rn/ex)
-                Rp = Rp-torch.floor(Rp/ex)*ex
-                Rn = Rn-torch.floor(Rn/ex)*ex
-
+                self.bweight.data[...,i] = torch.floor(Rb/ex)
+                Rb = Rb-torch.floor(Rb/ex)*ex
+            
+            
     def bin_reset_parameters(self):
-        ini_w = torch.full_like(self.pweight[...,0], 0)
+        ini_w = torch.full_like(self.bweight[...,0], 0)
         init.kaiming_uniform_(ini_w, a=math.sqrt(5))
         self.ini2bit(ini_w)
-        if self.pbias is not None:
-            #stdv = 1. / math.sqrt(self.pweight.size(1))
-            fan_in, _ = init._calculate_fan_in_and_fan_out(self.pweight)
+        if self.bbias is not None:
+            fan_in, _ = init._calculate_fan_in_and_fan_out(self.bweight)
             stdv = 1 / math.sqrt(fan_in)
             ini_b = torch.Tensor(self.out_channels).uniform_(-stdv, stdv)
             self.ini2bit(ini_b, b=True)
@@ -573,18 +532,16 @@ class Bit_ConvNd(Module):
                 self.bias.data = self.bias.data*0
                 self.bzero=True
             if self.transposed:
-                self.pweight = Parameter(self.weight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size, self.Nbits))
-                self.nweight = Parameter(self.weight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size, self.Nbits))
+                self.bweight = Parameter(self.weight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size, self.Nbits))
+
             else:
-                self.pweight = Parameter(self.weight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
-                self.nweight = Parameter(self.weight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
+                self.bweight = Parameter(self.weight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
+
             self.scale = Parameter(self.weight.data.new_zeros(1))
-            #print(self.weight.data.shape)
             self.ini2bit(self.weight.data)
             self.weight = None
             if self.bias is not None:
-                self.pbias = Parameter(self.bias.data.new_zeros(self.out_channels, self.bNbits))
-                self.nbias = Parameter(self.bias.data.new_zeros(self.out_channels, self.bNbits))
+                self.bbias = Parameter(self.bias.data.new_zeros(self.out_channels, self.bNbits))
                 self.biasscale = Parameter(self.bias.data.new_zeros(1))
                 self.ini2bit(self.bias.data, b=True)
                 self.bias = None
@@ -594,25 +551,30 @@ class Bit_ConvNd(Module):
             self.bin = False
             self.ft = False
             if self.transposed:
-                self.weight = Parameter(self.pweight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size))
+                self.weight = Parameter(self.bweight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size))
             else:
-                self.weight = Parameter(self.pweight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size))
-            dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            self.weight.data = torch.sum(weight,dim=-1) * self.scale
+                self.weight = Parameter(self.bweight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size))
+            dev = self.bweight.device
+            
+            weight = torch.mul(self.bweight, self.exps.to(dev))
+            weight = torch.sum(weight,dim=-1)
+            weight = torch.sub(weight, (self.Z/(2**(self.Nbits)-1)).to(dev))
+            
+            self.weight.data =  (weight* self.scale).float()
+            
             if self.Nbits==1 and (np.count_nonzero(self.weight.data.cpu().numpy())==0):
                 self.Nbits=0
-            self.pweight = None
-            self.nweight = None
+            self.bweight = None
             self.scale = None
-            if self.pbias is not None:
-                self.bias = Parameter(self.pbias.data.new_zeros(self.out_features))
-                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
-                self.bias.data = torch.sum(bias,dim=1) * self.biasscale
+            if self.bbias is not None:
+                self.bias = Parameter(self.bbias.data.new_zeros(self.out_features))
+                bias = torch.mul(self.bbias, self.bexps.to(dev))
+                bias = torch.sum(bias,dim=1)
+                bias = torch.sub(bias, (self.Zb/(2**(self.bNbits)-1)).to(dev))
+                self.bias.data = bias * self.biasscale
                 if self.bNbits==1 and np.count_nonzero(self.bias.data.cpu().numpy())==0:
                     self.bNbits=0
-                self.pbias = None
-                self.nbias = None
+                self.bbias = None
                 self.biasscale = None
         else:
             return
@@ -629,19 +591,17 @@ class Bit_ConvNd(Module):
             self.bias.data = self.bias.data*0
             self.bzero=True
         if self.transposed:
-            self.pweight = Parameter(self.weight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size, self.Nbits))
-            self.nweight = Parameter(self.weight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size, self.Nbits))
+            self.bweight = Parameter(self.weight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size, self.Nbits))
         else:
-            self.pweight = Parameter(self.weight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
-            self.nweight = Parameter(self.weight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
+            self.bweight = Parameter(self.weight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
+
         w = self.weight.data
         w = torch.where(w > 1, torch.full_like(w, 1), w)
         w = torch.where(w < -1, torch.full_like(w, -1), w)
         self.ini2bit(w,ft=True)
         self.weight = None
         if self.bias is not None:
-            self.pbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
-            self.nbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
+            self.bbias = Parameter(self.bias.data.new_zeros(self.out_features, self.bNbits))
             w = self.bias.data
             w = torch.where(w > 1, torch.full_like(w, 1), w)
             w = torch.where(w < -1, torch.full_like(w, -1), w)
@@ -653,37 +613,39 @@ class Bit_ConvNd(Module):
             self.bin = False
             self.ft=True
             if self.transposed:
-                self.weight = Parameter(self.pweight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size))
+                self.weight = Parameter(self.bweight.data.new_zeros(self.in_channels, self.out_channels // self.groups, *self.kernel_size))
             else:
-                self.weight = Parameter(self.pweight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size))
-            dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            self.weight.data = torch.sum(weight,dim=-1)
+                self.weight = Parameter(self.bweight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size))
+            dev = self.bweight.device
+            weight = torch.mul(self.bweight, self.exps.to(dev))
+            weight = torch.sum(weight,dim=-1)
+            self.weight.data = torch.sub(weight, (self.Z/(2**(self.Nbits)-1)).to(dev))
+            
             if self.Nbits==1 and (np.count_nonzero(self.weight.data.cpu().numpy())==0):
                 self.Nbits=0
-            self.pweight = None
-            self.nweight = None
-            if self.pbias is not None:
-                self.bias = Parameter(self.pbias.data.new_zeros(self.out_features))
-                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
-                self.bias.data = torch.sum(bias,dim=1)
+            self.bweight = None
+            if self.bbias is not None:
+                self.bias = Parameter(self.bbias.data.new_zeros(self.out_features))
+                bias = torch.mul(self.bbias, self.bexps.to(dev))
+                bias = torch.sum(bias,dim=1)
+                self.bias.data = torch.sub(bias, (self.Zb/(2**(self.bNbits)-1)).to(dev))
+                
                 if self.bNbits==1 and (np.count_nonzero(self.bias.data.cpu().numpy())==0):
                     self.bNbits=0
-                self.pbias = None
-                self.nbias = None
+                self.bbias = None
         else:
             return
            
     def print_stat(self):
-        weight = self.pweight.data.cpu().numpy()-self.nweight.data.cpu().numpy()
+    # For binary model
+        weight = self.bweight.data.cpu().numpy()
         total_weight = np.prod(weight.shape)/self.Nbits
         nonz_weight = [np.count_nonzero(weight[...,i])*100 for i in range(self.Nbits)]
-        #print(self.scale.data.cpu().numpy())
         print('Weight: '+np.array2string(nonz_weight/total_weight, separator='%, ', formatter={'float_kind':lambda x: "%6.2f" % x}).strip('[]')+'%')
-        if self.pbias is not None:
-            bia = self.pbias.data.cpu().numpy()-self.nbias.data.cpu().numpy()
-            total_weight = np.prod(bia.shape)/self.bNbits
-            nonz_weight = [np.count_nonzero(bia[:,i])*100 for i in range(self.bNbits)]
+        if self.bbias is not None:
+            bias = self.bbias.data.cpu().numpy()
+            total_weight = np.prod(bias.shape)/self.bNbits
+            nonz_weight = [np.count_nonzero(bias[:,i])*100 for i in range(self.bNbits)]
             print('Bias:   '+np.array2string(nonz_weight/total_weight, separator='%, ', formatter={'float_kind':lambda x: "%6.2f" % x}).strip('[]')+'%')
 
     def extra_repr(self):
@@ -729,63 +691,40 @@ class BitConv2d(Bit_ConvNd):
     # For binary model
         ## Re-quantize the binary part of the weight, keep scale unchanged
         
-        dev = self.pweight.device
+        dev = self.bweight.device
         ## Quantize weight
-        weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
+        weight = torch.mul(self.bweight, self.exps.to(dev))
         weight = torch.sum(weight,dim=4)
-        inip = torch.where(weight > 0, weight, torch.full_like(weight, 0))
-        inin = torch.where(weight <= 0, -weight, torch.full_like(weight, 0))
+#         weight = torch.sub(weight, (self.Z/(2**(self.Nbits)-1)).to(dev))
+        ini = torch.clone(weight)
+       
         step = 2 ** (self.Nbits)-1
-        Rp = torch.round(inip * step)
-        Rn = torch.round(inin * step)
-        ## Increase layer precision if the binary part is out of range
-#         if self.Nbits>=maxbit:
-#             Rp = torch.where(Rp > step, torch.full_like(Rp, step), Rp)
-#             Rn = torch.where(Rn > step, torch.full_like(Rn, step), Rn)
-#         elif torch.max(torch.cat((Rp,Rn),0))>step:
-#             self.Nbits = self.Nbits+1
-#             self.pweight = Parameter(self.pweight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
-#             self.nweight = Parameter(self.nweight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
-#             N = self.Nbits 
-#             ex = np.arange(N-1, -1, -1)
-#             self.exps = torch.Tensor((2**ex)/(2**(N)-1)).float()
-#             self.scale.data = self.scale.data*(2**(N)-1)/(2**(N-1)-1)
         
+#         ini = torch.add(ini, self.Z/step)
+        Rb = torch.round(ini * step)
+        
+
+
         for i in range(self.Nbits):
             ex = 2**(self.Nbits-i-1)
-            self.pweight.data[...,i] = torch.floor(Rp/ex)
-            self.nweight.data[...,i] = torch.floor(Rn/ex)
-            Rp = Rp-torch.floor(Rp/ex)*ex
-            Rn = Rn-torch.floor(Rn/ex)*ex
+            self.bweight.data[...,i] = torch.floor(Rb/ex)
+            Rb = Rb - torch.floor(Rb/ex)*ex
+            
         ## Quantize bias
-        if self.pbias is not None:
-            weight = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
+        if self.bbias is not None:
+            weight = torch.mul(self.bweight, self.exps.to(dev))
             weight = torch.sum(weight,dim=1)
-            inip = torch.where(weight > 0, weight, torch.full_like(weight, 0))
-            inin = torch.where(weight <= 0, -weight, torch.full_like(weight, 0))
+            weight = torch.sub(weight, (self.Zb/(2**(self.bNbits)-1)).to(dev))
+            ini = torch.clone(weight)
             step = 2 ** (self.bNbits)-1
-            Rp = torch.round(inip * step)
-            Rn = torch.round(inin * step)
-            
-            ## Increase layer precision if the binary part is out of range
-#             if self.bNbits>=maxbit:
-#                 Rp = torch.where(Rp > step, torch.full_like(Rp, step), Rp)
-#                 Rn = torch.where(Rn > step, torch.full_like(Rn, step), Rn)
-#             elif torch.max(torch.cat((Rp,Rn),0))>step:
-#                 self.Nbits = self.Nbits+1
-#                 self.pbias = Parameter(self.pbias.data.new_zeros(self.out_channels, self.Nbits))
-#                 self.nbias = Parameter(self.nbias.data.new_zeros(self.out_channels, self.Nbits))
-#                 N = self.bNbits 
-#                 ex = np.arange(N-1, -1, -1)
-#                 self.bexps = torch.Tensor((2**ex)/(2**(N)-1)).float()
-#                 self.biasscale.data = self.biasscale.data*(2**(N)-1)/(2**(N-1)-1)
-            
+            ini = torch.add(ini, self.biasscale.data*self.Zb/step)
+            Rb = torch.round(ini * step)
+
             for i in range(self.bNbits):
                 ex = 2**(self.bNbits-i-1)
-                self.pbias.data[:,i] = torch.floor(Rp/ex)
-                self.nbias.data[:,i] = torch.floor(Rn/ex)
-                Rp = Rp-torch.floor(Rp/ex)*ex
-                Rn = Rn-torch.floor(Rn/ex)*ex
+                self.bbias.data[:,i] = torch.floor(Rb/ex)
+                Rb = Rb-torch.floor(Rb/ex)*ex
+                
 
     def conv2d_forward(self, input, weight, bias):
         if self.padding_mode == 'circular':
@@ -799,33 +738,35 @@ class BitConv2d(Bit_ConvNd):
 
     def forward(self, input):
         if self.bin:
-            dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            weight = bit_STE.apply(torch.sum(weight,dim=4), self.Nbits, self.zero) * self.scale
-
-            if self.pbias is not None:
-                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
-                bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
+            dev = self.bweight.device
+            weight = torch.mul(self.bweight, self.exps.to(dev))
+            weight = torch.sum(weight,dim=4)
+            weight = torch.sub(weight, (self.Z/(2**(self.Nbits)-1)).to(dev))
+            weight = bit_STE.apply(weight, self.Nbits, self.zero) * self.scale
+            if self.bbias is not None:
+                bias = torch.mul(self.bbias, self.bexps.to(dev))
+                bias = torch.sum(bias,dim=1)
+                bias = torch.sub(bias, (self.Zb/(2**(self.bNbits)-1)).to(dev))
+                bias = bit_STE.apply(bias, self.bNbits, self.bzero) * self.biasscale
             else:
                 bias = None
             return self.conv2d_forward(input, weight, bias)
         elif self.ft:
             weight = bit_STE.apply(self.weight, self.Nbits, self.zero) * self.scale
-            if self.pbias is not None:
+            if self.bbias is not None:
                 bias = bit_STE.apply(self.bias, self.bNbits, self.bzero) * self.biasscale
             else:
                 bias = None
             return self.conv2d_forward(input, weight, bias)
         else:
             return self.conv2d_forward(input, self.weight, self.bias)
-            #return self.conv2d_forward(input, STE.apply(self.weight, self.Nbits), self.bias)
         
     def L1reg(self,reg):
-        param = torch.cat((self.pweight,self.nweight),0)
+        param = self.bweight
         total_weight = self.total_weight*self.Nbits
         reg += torch.sum(torch.sqrt(1e-8+torch.sum(param**2,(0,1,2,3))))*total_weight
-        if self.pbias is not None:
-            param = torch.cat((self.pbias,self.nbias),0)
+        if self.bbias is not None:
+            param = self.bbias
             reg += torch.sum(torch.sqrt(1e-8+torch.sum(param**2,0)))
         return reg
          
