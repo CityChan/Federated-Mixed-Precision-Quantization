@@ -7,7 +7,10 @@ import time
 import torch
 from sampling import count_data_partitions,get_dataloaders_Dirichlet
 
-from server import Server
+from server.server_fedmpq import Server_FedMPQ
+from server.server_aqfl import Server_AQFL
+from server.server_fp import Server_FP
+
 def train(args):
     seed_list = copy.deepcopy(args['seed'])
     device = copy.deepcopy(args['device'])
@@ -30,7 +33,11 @@ def train(args):
 def _train(args):
     trainloaders,testloader = get_dataloaders_Dirichlet(n_clients = args["n_clients"], alpha=args["alpha"], rand_seed = 
                                                         args["seed"], dataset = args["dataset"], batch_size = args["batch_size"])
-    
-    server = Server(args,trainloaders,testloader)
+    if args["alg"] == "FedMPQ":
+        server = Server_FedMPQ(args,trainloaders,testloader)
+    if args["alg"] == "AQFL":
+        server = Server_AQFL(args,trainloaders,testloader)
+    if args["alg"] == "FP":
+        server = Server_FP(args,trainloaders,testloader)
     server.train()
     

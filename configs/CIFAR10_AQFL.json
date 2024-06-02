@@ -1,7 +1,7 @@
 {
     "alpha": 0.5,
     "dataset": "CIFAR10",
-    "alg": "FedMPQ",
+    "alg": "AQFL",
     "n_classes": 10,
     "batch_size": 128,
     "n_clients": 10,

@@ -8,7 +8,8 @@ from models.resnet import resnet
 import time
 import torch
 import copy
-class Client(object):
+from QuantOptimizer import QuantOptimizer
+class Client_AQFL(object):
     def __init__(self, args, trainloader,idx, budget, bin = True):
         self.args = args
         self.trainloader = trainloader
@@ -22,17 +23,20 @@ class Client(object):
         self.criterion = nn.CrossEntropyLoss()
         self.Nbit_dict = self.model.pruning(threshold=0.0, drop=True)
         self.bit_assignment = []
-        
         # getting original bit width assignment 
         for key in self.Nbit_dict.keys():
             self.bit_assignment.append(self.Nbit_dict[key][0])
+        
+        # number of parameters
         self.TP = self.model.total_param()
+        # number of bits
         self.TB = self.model.total_bit()
+        # compression rate
         self.Comp = (self.TP *32)/self.TB
         self.optimizer = optim.SGD(self.model.parameters(), lr=args["lr"], momentum=args["momentum"], 
                                    weight_decay=args["weight_decay"])
-        self.delta_bit = [0]*len(self.bit_assignment)
-        state = copy.deepcopy(args)
+        self.state = copy.deepcopy(args)
+        
     def train(self,epoch):
         self.model.train()
 
@@ -75,7 +79,10 @@ class Client(object):
             total_loss.backward()
             self.optimizer.step()
             
-            
+            for name, module in self.model.named_modules():
+                if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
+                    module.quant(maxbit = 8)
+                    
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
@@ -94,34 +101,19 @@ class Client(object):
 
     def local_training(self, global_epoch):
         self.optimizer = optim.SGD(self.model.parameters(), lr=self.args["lr"], momentum=self.args["momentum"],                                                             weight_decay=self.args["weight_decay"])
-        
         for epoch in range(self.args["local_epochs"]):
             self.adjust_learning_rate(epoch + global_epoch*self.args["local_epochs"])
             for param_group in self.optimizer.param_groups:
                 lr = param_group['lr']
             train_acc = self.train(epoch)
             
-            for name, module in self.model.named_modules():
-                if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
-                    module.quant(maxbit = 8)
+#             for name, module in self.model.named_modules():
+#                 if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
+#                     module.quant(maxbit = 8)
                     
         print(f'Client {self.idx} Training Top 1 Acc at global round {global_epoch} : {train_acc}') 
-            
-        
-        # update bitwidth assignment 
-        self.Nbit_dict = self.model.pruning(threshold=self.args["thre"], drop=True)
-        
-        bit_assignment = []
-        delta_bit = []
-        for key in self.Nbit_dict.keys():
-            bit_assignment.append(self.Nbit_dict[key][0])
-        
-        for i in range(len(bit_assignment)):
-            delta_bit.append(self.bit_assignment[i] - bit_assignment[i])
-        
-        self.delta_bit = delta_bit
-        self.bit_assignment = bit_assignment
-        
+
+               
         del self.optimizer
         self.TP = self.model.total_param()
         self.TB = self.model.total_bit()
@@ -130,11 +122,10 @@ class Client(object):
         
         
     def adjust_learning_rate(self, epoch):
-        global state
         if epoch in self.args["schedule"]:
-            state['lr'] *= self.args["gamma"]
+            self.state['lr'] *= self.args["gamma"]
             for param_group in self.optimizer.param_groups:
-                param_group['lr'] = state['lr']
+                param_group['lr'] = self.state['lr']
                 
     def load_model(self,global_weights):
         self.model.load_state_dict(global_weights)

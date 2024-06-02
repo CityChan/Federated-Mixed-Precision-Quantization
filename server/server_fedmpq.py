@@ -1,4 +1,6 @@
-from client import Client
+import sys
+sys.path.append('../')
+from client.client_fedmpq import Client_FedMPQ as Client
 from torch.utils.data import Dataset
 import torch
 import copy
@@ -11,7 +13,7 @@ from models.bit import BitLinear, BitConv2d
 from models.resnet import resnet
 import numpy as np
 
-class Server(object):
+class Server_FedMPQ(object):
     def __init__(self,args,trainloaders, testloader):
         self.args = args
         self.trainloaders = trainloaders
@@ -19,16 +21,24 @@ class Server(object):
         self.device = args["device"]
         self.clients = []
         self.budgets = args["budgets"]
+        
+        # local modes are quantized
         for idx in range(args["n_clients"]):
             self.clients.append(Client(args, trainloaders[idx], idx, self.budgets[idx], bin = True))
+        
+        # global model is full-precision 
         self.global_model = resnet(num_classes=args["n_classes"], depth=20, block_name= 'BasicBlock', 
                                               Nbits = 16, act_bit = 16, bin = False).cuda()
+        
+        
         n_samples = np.array([len(client.trainloader.dataset)*client.budget for client in self.clients])
+        # compute client's weight based on number of data samples
         self.client_weights = n_samples / np.sum(n_samples)
         num_params = []
         for name, module in self.global_model.named_modules():   
             if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
                 num_params.append(module.total_weight)
+        # compute layer's weight based on number of parameters
         self.num_params = np.array(num_params)
         self.layer_weights = self.num_params/np.sum(self.num_params)
 
@@ -52,7 +62,7 @@ class Server(object):
                 local_weights.append(self.clients[idx].model.state_dict())
                 local_bit_assignments.append(np.array(self.clients[idx].bit_assignment))
                 local_delta_bits.append(np.array(self.clients[idx].delta_bit))
-                
+
             global_weights = average_weights(local_weights)
             average_bit_assignment, average_dealta_bit = average_stat(local_bit_assignments,local_delta_bits,sampled_clients, self.client_weights)
             layers_priority = self.layer_weights*average_dealta_bit

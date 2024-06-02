@@ -1,20 +1,17 @@
 {
     "alpha": 0.5,
     "dataset": "CIFAR10",
-    "alg": "FedMPQ",
+    "alg": "FP",
     "n_classes": 10,
     "batch_size": 128,
     "n_clients": 10,
-    "local_epochs": 2,
+    "local_epochs": 5,
     "epochs": 50,
-    "thre": 3.0,
-    "lambda": 0.01,
     "sampling_rate": 1.0,
     "lr": 0.1,
     "momentum": 0.9,
     "schedule":[150, 225], 
     "gamma": 0.1,
     "weight_decay": 5e-4,
-    "budgets":[2,2,4,4,4,6,6,6,8,8],
     "seed": [0]
 }

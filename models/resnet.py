@@ -313,7 +313,8 @@ class ResNet(nn.Module):
                         m.bzero=False
                          
     
-    def pruning(self, threshold=1.0, drop=True):   #Use drop to control whether 0 bit after pruning will be removed, 0 bit before pruning will always be removed
+    def pruning(self, threshold=1.0, drop=True):   
+        #Use drop to control whether 0 bit after pruning will be removed, 0 bit before pruning will always be removed
         Nbit_dict = {}
         for name, m in self.named_modules():
             if isinstance(m,BitLinear) or isinstance(m,BitConv2d):
@@ -432,8 +433,18 @@ class ResNet(nn.Module):
                     Nbit_dict[name] = [m.Nbits, 0]
         return Nbit_dict
     
+    
 def resnet(**kwargs):
     """
     Constructs a ResNet model.
     """
     return ResNet(**kwargs)
+
+
+
+
+
+
+
+
+
