@@ -33,8 +33,6 @@ class Client_AQFL(object):
         self.TB = self.model.total_bit()
         # compression rate
         self.Comp = (self.TP *32)/self.TB
-        self.optimizer = optim.SGD(self.model.parameters(), lr=args["lr"], momentum=args["momentum"], 
-                                   weight_decay=args["weight_decay"])
         self.state = copy.deepcopy(args)
         
     def train(self,epoch):
@@ -79,10 +77,7 @@ class Client_AQFL(object):
             total_loss.backward()
             self.optimizer.step()
             
-            for name, module in self.model.named_modules():
-                if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
-                    module.quant(maxbit = 8)
-                    
+
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
@@ -100,16 +95,13 @@ class Client_AQFL(object):
 
 
     def local_training(self, global_epoch):
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args["lr"], momentum=self.args["momentum"],                                                             weight_decay=self.args["weight_decay"])
+        self.optimizer = QuantOptimizer(self.model,self.model.parameters(), lr=self.args["lr"], 
+                                        momentum=self.args["momentum"],weight_decay=self.args["weight_decay"])
         for epoch in range(self.args["local_epochs"]):
             self.adjust_learning_rate(epoch + global_epoch*self.args["local_epochs"])
             for param_group in self.optimizer.param_groups:
                 lr = param_group['lr']
             train_acc = self.train(epoch)
-            
-#             for name, module in self.model.named_modules():
-#                 if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
-#                     module.quant(maxbit = 8)
                     
         print(f'Client {self.idx} Training Top 1 Acc at global round {global_epoch} : {train_acc}') 
 

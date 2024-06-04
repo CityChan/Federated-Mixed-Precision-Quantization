@@ -13,5 +13,5 @@
     "schedule":[150, 225], 
     "gamma": 0.1,
     "weight_decay": 5e-4,
-    "seed": [0]
+    "seed": [42]
 }

@@ -19,6 +19,9 @@ class Client_FedMPQ(object):
         self.model  = resnet(num_classes=args["n_classes"], depth=20, block_name= 'BasicBlock', Nbits = self.budget,
                       act_bit = 4, bin = bin).cuda()
         
+        for name, module in self.model.named_modules():
+                if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
+                    module.quant(maxbit = 8)
         print(f'Total params of client_{idx}: %.2fM' % (sum(p.numel() for p in self.model.parameters())/1000000.0))
         self.criterion = nn.CrossEntropyLoss()
         self.Nbit_dict = self.model.pruning(threshold=0.0, drop=True)
@@ -33,10 +36,6 @@ class Client_FedMPQ(object):
         self.TB = self.model.total_bit()
         # compression rate
         self.Comp = (self.TP *32)/self.TB
-        self.optimizer = optim.SGD(self.model.parameters(), lr=args["lr"], momentum=args["momentum"], 
-                                   weight_decay=args["weight_decay"])
-
-#         self.optimizer = QuantOptimizer(self.model.parameters(), lr=args["lr"],weight_decay=args["weight_decay"])
         # number of pruned bits for each layer
         self.delta_bit = [0]*len(self.bit_assignment)
         self.state = copy.deepcopy(args)
@@ -83,9 +82,7 @@ class Client_FedMPQ(object):
             total_loss.backward()
             self.optimizer.step()
             
-            for name, module in self.model.named_modules():
-                if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
-                    module.quant(maxbit = 8)
+                    
             # measure elapsed time
             batch_time.update(time.time() - end)
             end = time.time()
@@ -103,8 +100,8 @@ class Client_FedMPQ(object):
 
 
     def local_training(self, global_epoch):
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args["lr"], momentum=self.args["momentum"],                                                             weight_decay=self.args["weight_decay"])
-#         self.optimizer = QuantOptimizer(self.model.parameters(), lr=self.args["lr"],weight_decay=self.args["weight_decay"])
+        self.optimizer = QuantOptimizer(self.model, self.model.parameters(), lr=self.args["lr"], 
+                                        momentum=self.args["momentum"],weight_decay=self.args["weight_decay"])
         for epoch in range(self.args["local_epochs"]):
             self.adjust_learning_rate(epoch + global_epoch*self.args["local_epochs"])
             for param_group in self.optimizer.param_groups:
