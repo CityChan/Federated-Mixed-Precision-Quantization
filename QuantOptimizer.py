@@ -23,21 +23,17 @@ class QuantOptimizer(Optimizer):
                         buf.mul_(group['momentum']).add_(d_p, alpha = 1)
                     d_p = buf
                 if len(d_p.data.shape) == 3 or  len(d_p.data.shape) == 5:
-                    
-                    
                     Nbits = d_p.data.shape[-1]
                     dev = d_p.device
                     ex = np.arange(Nbits-1, -1, -1)
                     exps = torch.Tensor(2**ex).float()
                     sign = torch.where(d_p.data > 0, torch.full_like(d_p.data, 1), torch.full_like(d_p.data, -1))
-                    dB = torch.mul(self.PowerOfTwo(abs(d_p.data)), exps.to(dev))
+                    dB = torch.mul(self.PowerOfTwo(abs(d_p.data)*group['lr']), exps.to(dev))
                     dB = torch.mul(dB,sign)
                     dB = torch.div(dB, exps.to(dev))
                     for i in range(Nbits):
-                        ex = 2**(Nbits-i-1)
-                        d_p.data[...,i] = dB[...,i]
-
-                    p.data.add_(d_p.data, alpha = -group['lr'])
+                        d_p.data[...,i]  = dB[...,i]
+                    p.data.add_(d_p.data, alpha = -1)
                     
                 else:
                     p.data.add_(d_p.data, alpha = -group['lr'])
