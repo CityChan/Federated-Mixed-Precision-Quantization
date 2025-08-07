@@ -7,6 +7,14 @@ import torchvision.transforms as transforms
 from torchvision.datasets import ImageFolder
 import os
 
+
+cache_path = "./data/data_partitions"
+
+if not os.path.exists(cache_path):
+    os.makedirs(cache_path)
+
+
+
 def count_data_partitions(list_loaders, dataset):
     n_clients = len(list_loaders)
     Counts = []
