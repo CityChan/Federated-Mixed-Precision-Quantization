@@ -8,29 +8,24 @@ This is the official implementation for the CVPR2024 paper
 `pip install -r requirements.txt`
 
 
-## Code instruction
+## Code Structure
 - ```main.py```: endpoint for starting experiments
 - ```option.py```: hyper-parameters for experiments
-- ```trainer.py```: including three algorithms: "FedMPQ", "AQFL", "FP"
+- ```trainer.py```: includes three algorithms: "FedMPQ", "AQFL", "FP"
 - ```QuantOptimizer.py```: quantization-aware optimizer 
 - ```sampling.py```: functions for generating data partitions with Dirichlet distribution
+- ```./client```: includes clients implementing different algorithms
+- ```./server```: includes server implementing aggregation
+- ```./model```: includes ResNet model with bit-level operation
+- ```./utils```: utility function for evaluation
+- ```./configs```: includes training configurations for different experiments
 
 
 ## Running an experiment
+```
+python main.py --config ./configs/CIFAR10_FedMPQ_0.5.json 
+```
 
-- --dataset: CIFAR10, CIFAR100, FMNIST
-- --batch_size: size of mini batch
-- --num_epochs: total number of global communication rounds
-- --num_clients: number of clients
-- --sampling_rate: fraction of clients participating local training each global round
-- --local_ep: number of local epochs
-- --alphas: list of concentration parameters for generating data partitions
-- --T: scaling parameter, temperature
-- --seed: random seed for generating data partitions
-- --alg: random, pow-d, CS, DivFL, HiCS
-- --lr: initializing learning rate
-
-We gave an example in `train_script.sh`
 
 ### Citeation
 Please cite our paper, if you think this is useful:
