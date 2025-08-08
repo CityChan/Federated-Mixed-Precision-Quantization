@@ -27,7 +27,7 @@ python main.py --config ./configs/CIFAR10_FedMPQ_0.5.json
 ```
 
 ## Acknowledgement
-This repository is built on the top of [BSQ](https://github.com/yanghr/BSQ).
+This repository is built on the top of [BSQ](https://github.com/yanghr/BSQ). 
 
 
 ### Citeation
