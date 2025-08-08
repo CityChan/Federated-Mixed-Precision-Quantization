@@ -9,13 +9,12 @@ This is the official implementation for the CVPR2024 paper
 
 
 ## Code instruction
-- `models.py`: the model's structure used in the experiments
-- `utils.py`: utilization functions for computing metrics of the experiments
-- `DivFL_utils.py`: utilization functions for DivFL sampling method
-- `clustering_utils.py`: utilization function for Clustered sampling method
-- `sampling.py`: functions for generating data partitions with Dirichlet distribution
-- `HiCS.py`: utilization function for HiCS-FL sampling method
-- `train.py`: training main function
+- ```main.py```: endpoint for starting experiments
+- ```option.py```: hyper-parameters for experiments
+- ```trainer.py```: including three algorithms: "FedMPQ", "AQFL", "FP"
+- ```QuantOptimizer.py```: quantization-aware optimizer 
+- ```sampling.py```: functions for generating data partitions with Dirichlet distribution
+
 
 ## Running an experiment
 
