@@ -26,6 +26,9 @@ This is the official implementation for the CVPR2024 paper
 python main.py --config ./configs/CIFAR10_FedMPQ_0.5.json 
 ```
 
+## Acknowledgement
+This repository is built on the top of [BSQ](https://github.com/yanghr/BSQ).
+
 
 ### Citeation
 Please cite our paper, if you think this is useful:
